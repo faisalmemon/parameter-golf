@@ -8,5 +8,5 @@ docker run --gpus all -it --rm \
   --ipc=host \
   -e HOME=/tmp \
   -p 6006:6006 \
-  nvcr.io/nvidia/pytorch:24.03-py3 \
+  nvcr.io/nvidia/pytorch:26.01-py3 \
   /bin/bash -c "pip install --user kernels tiktoken datasets sentencepiece huggingface-hub && /bin/bash"
