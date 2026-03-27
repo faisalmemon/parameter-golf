@@ -15,17 +15,31 @@ sed -i 's/compiled_model = torch.compile(base_model, dynamic=False, fullgraph=Tr
 export TRITON_MAX_REGS_PER_THREAD=255
 export TORCHINDUCTOR_REDUCE_OP_FUSION=0
 
-# 4. Define Run Parameters
-RUN_ID="spark_stable_$(date +%M%S)"
+# 4. Define Run Parameters (exported so Hyperparameters picks them up via os.environ)
+export RUN_ID="spark_stable_$(date +%M%S)"
 DATA_PATH="./data/datasets/fineweb10B_sp1024/"
 TOKENIZER_PATH="./data/tokenizers/fineweb_1024_bpe.model"
 VOCAB_SIZE=1024
 
-echo "Launching Run: $RUN_ID"
+mkdir -p /workspace/profiles
 
-# 5. Execute
-torchrun --standalone --nproc_per_node=1 train_gpt.py \
-    --run_id=$RUN_ID \
-    --data_path=$DATA_PATH \
-    --tokenizer_path=$TOKENIZER_PATH \
-    --vocab_size=$VOCAB_SIZE
+echo "Launching Run: $RUN_ID"
+echo "Profile output: /workspace/profiles/roundtrip_${RUN_ID}.nsys-rep"
+
+# 5. Execute under nsys.
+# --capture-range=cudaProfilerApi means nsys records nothing until cudaProfilerStart()
+# is called inside eval_val (first 5 batches of the roundtrip eval only).
+nsys profile \
+    --trace=cuda,nvtx \
+    --capture-range=cudaProfilerApi \
+    --capture-range-end=stop \
+    --output=/workspace/profiles/roundtrip_${RUN_ID} \
+    torchrun --standalone --nproc_per_node=1 train_gpt.py \
+        --run_id=$RUN_ID \
+        --data_path=$DATA_PATH \
+        --tokenizer_path=$TOKENIZER_PATH \
+        --vocab_size=$VOCAB_SIZE
+
+echo ""
+echo "Profile written to: /workspace/profiles/roundtrip_${RUN_ID}.nsys-rep"
+echo "Log written to: logs/${RUN_ID}.txt"
