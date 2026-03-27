@@ -27,6 +27,8 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 
+from torch.cuda import nvtx
+
 # -----------------------------
 # HYPERPARAMETERS
 # -----------------------------
@@ -227,6 +229,7 @@ def eval_val(
     base_bytes_lut: Tensor,
     has_leading_space_lut: Tensor,
     is_boundary_token_lut: Tensor,
+    label: str = "eval_val",
 ) -> tuple[float, float]:
     # Validation computes two metrics:
     # - val_loss: token cross-entropy (natural log)
@@ -247,29 +250,35 @@ def eval_val(
     val_byte_count = torch.zeros((), device=device, dtype=torch.float64)
 
     model.eval()
+    nvtx.range_push(label)
     with torch.inference_mode():
-        for batch_seq_start in range(seq_start, seq_end, local_batch_seqs):
-            batch_seq_end = min(batch_seq_start + local_batch_seqs, seq_end)
-            raw_start = batch_seq_start * args.train_seq_len
-            raw_end = batch_seq_end * args.train_seq_len + 1
-            local = val_tokens[raw_start:raw_end].to(device=device, dtype=torch.int64, non_blocking=True)
-            x = local[:-1].reshape(-1, args.train_seq_len)
-            y = local[1:].reshape(-1, args.train_seq_len)
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
-                batch_loss = model(x, y).detach()
-            batch_token_count = float(y.numel())
-            val_loss_sum += batch_loss.to(torch.float64) * batch_token_count
-            val_token_count += batch_token_count
-            prev_ids = x.reshape(-1)
-            tgt_ids = y.reshape(-1)
-            token_bytes = base_bytes_lut[tgt_ids].to(dtype=torch.int16)
-            token_bytes += (has_leading_space_lut[tgt_ids] & ~is_boundary_token_lut[prev_ids]).to(dtype=torch.int16)
-            val_byte_count += token_bytes.to(torch.float64).sum()
+        for batch_idx, batch_seq_start in enumerate(range(seq_start, seq_end, local_batch_seqs)):
+            with nvtx.range(f"batch_{batch_idx}"):
+                batch_seq_end = min(batch_seq_start + local_batch_seqs, seq_end)
+                raw_start = batch_seq_start * args.train_seq_len
+                raw_end = batch_seq_end * args.train_seq_len + 1
+                local = val_tokens[raw_start:raw_end].to(device=device, dtype=torch.int64, non_blocking=True)
+                x = local[:-1].reshape(-1, args.train_seq_len)
+                y = local[1:].reshape(-1, args.train_seq_len)
+                with nvtx.range("forward"):
+                    with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
+                        batch_loss = model(x, y).detach()
+                batch_token_count = float(y.numel())
+                val_loss_sum += batch_loss.to(torch.float64) * batch_token_count
+                val_token_count += batch_token_count
+                with nvtx.range("byte_count"):
+                    prev_ids = x.reshape(-1)
+                    tgt_ids = y.reshape(-1)
+                    token_bytes = base_bytes_lut[tgt_ids].to(dtype=torch.int16)
+                    token_bytes += (has_leading_space_lut[tgt_ids] & ~is_boundary_token_lut[prev_ids]).to(dtype=torch.int16)
+                    val_byte_count += token_bytes.to(torch.float64).sum()
 
-    if dist.is_available() and dist.is_initialized():
-        dist.all_reduce(val_loss_sum, op=dist.ReduceOp.SUM)
-        dist.all_reduce(val_token_count, op=dist.ReduceOp.SUM)
-        dist.all_reduce(val_byte_count, op=dist.ReduceOp.SUM)
+    with nvtx.range("all_reduce"):
+        if dist.is_available() and dist.is_initialized():
+            dist.all_reduce(val_loss_sum, op=dist.ReduceOp.SUM)
+            dist.all_reduce(val_token_count, op=dist.ReduceOp.SUM)
+            dist.all_reduce(val_byte_count, op=dist.ReduceOp.SUM)
+    nvtx.range_pop()  # label
 
     val_loss = val_loss_sum / val_token_count
     bits_per_token = val_loss.item() / math.log(2.0)
@@ -991,6 +1000,7 @@ def main() -> None:
                 base_bytes_lut,
                 has_leading_space_lut,
                 is_boundary_token_lut,
+                label=f"eval_periodic_step{step}",
             )
             log0(
                 f"step:{step}/{args.iterations} val_loss:{val_loss:.4f} val_bpb:{val_bpb:.4f} "
@@ -1113,6 +1123,7 @@ def main() -> None:
         base_bytes_lut,
         has_leading_space_lut,
         is_boundary_token_lut,
+        label="eval_roundtrip_int8",
     )
     torch.cuda.synchronize()
     log0(
