@@ -230,6 +230,7 @@ def eval_val(
     has_leading_space_lut: Tensor,
     is_boundary_token_lut: Tensor,
     label: str = "eval_val",
+    profile_n_batches: int = 0,
 ) -> tuple[float, float]:
     # Validation computes two metrics:
     # - val_loss: token cross-entropy (natural log)
@@ -251,8 +252,12 @@ def eval_val(
 
     model.eval()
     nvtx.range_push(label)
+    _profiler_stopped = False
     with torch.inference_mode():
         for batch_idx, batch_seq_start in enumerate(range(seq_start, seq_end, local_batch_seqs)):
+            if profile_n_batches > 0 and batch_idx == 0:
+                torch.cuda.synchronize()
+                torch.cuda.cudart().cudaProfilerStart()
             with nvtx.range(f"batch_{batch_idx}"):
                 batch_seq_end = min(batch_seq_start + local_batch_seqs, seq_end)
                 raw_start = batch_seq_start * args.train_seq_len
@@ -272,6 +277,10 @@ def eval_val(
                     token_bytes = base_bytes_lut[tgt_ids].to(dtype=torch.int16)
                     token_bytes += (has_leading_space_lut[tgt_ids] & ~is_boundary_token_lut[prev_ids]).to(dtype=torch.int16)
                     val_byte_count += token_bytes.to(torch.float64).sum()
+            if profile_n_batches > 0 and batch_idx + 1 >= profile_n_batches and not _profiler_stopped:
+                torch.cuda.synchronize()
+                torch.cuda.cudart().cudaProfilerStop()
+                _profiler_stopped = True
 
     with nvtx.range("all_reduce"):
         if dist.is_available() and dist.is_initialized():
@@ -1124,6 +1133,7 @@ def main() -> None:
         has_leading_space_lut,
         is_boundary_token_lut,
         label="eval_roundtrip_int8",
+        profile_n_batches=5,
     )
     torch.cuda.synchronize()
     log0(
