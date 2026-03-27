@@ -16,7 +16,10 @@ export TRITON_MAX_REGS_PER_THREAD=255
 export TORCHINDUCTOR_REDUCE_OP_FUSION=0
 
 # 4. Define Run Parameters (exported so Hyperparameters picks them up via os.environ)
-export RUN_ID="spark_stable_$(date +%M%S)"
+export RUN_ID="spark_smoke_$(date +%M%S)"
+export MAX_WALLCLOCK_SECONDS=60
+export WARMUP_STEPS=20
+export VAL_LOSS_EVERY=0
 DATA_PATH="./data/datasets/fineweb10B_sp1024/"
 TOKENIZER_PATH="./data/tokenizers/fineweb_1024_bpe.model"
 VOCAB_SIZE=1024
