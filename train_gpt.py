@@ -867,8 +867,13 @@ def main() -> None:
         if isinstance(module, CastedLinear):
             module.float()
     restore_low_dim_params_to_fp32(base_model)
-    #compiled_model = base_model
-    compiled_model = base_model
+    _compile_mode = os.environ.get("TORCH_COMPILE_MODEL", "")
+    if _compile_mode:
+        compiled_model = torch.compile(base_model, mode=_compile_mode)
+        log0(f"torch_compile_model:mode={_compile_mode}")
+    else:
+        compiled_model = base_model
+        log0("torch_compile_model:disabled")
     model: nn.Module = DDP(compiled_model, device_ids=[local_rank], broadcast_buffers=False) if distributed else compiled_model
 
     # Optimizer split:
