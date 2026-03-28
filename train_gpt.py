@@ -152,7 +152,9 @@ class Muon(torch.optim.Optimizer):
                     buf.mul_(momentum).add_(g)
                     if nesterov:
                         g = g.add(buf, alpha=momentum)
+                    nvtx.range_push("newton_schulz5")
                     g = zeropower_via_newtonschulz5(g, steps=backend_steps)
+                    nvtx.range_pop()  # newton_schulz5
                     # Scale correction from Muon reference implementations.
                     g *= max(1, g.size(0) / g.size(1)) ** 0.5
                     updates_flat[curr : curr + p.numel()] = g.reshape(-1)
@@ -657,9 +659,14 @@ class Block(nn.Module):
     def forward(self, x: Tensor, x0: Tensor) -> Tensor:
         mix = self.resid_mix.to(dtype=x.dtype)
         x = mix[0][None, None, :] * x + mix[1][None, None, :] * x0
+        nvtx.range_push("attn")
         attn_out = self.attn(self.attn_norm(x))
+        nvtx.range_pop()  # attn
         x = x + self.attn_scale.to(dtype=x.dtype)[None, None, :] * attn_out
-        x = x + self.mlp_scale.to(dtype=x.dtype)[None, None, :] * self.mlp(self.mlp_norm(x))
+        nvtx.range_push("mlp")
+        mlp_out = self.mlp(self.mlp_norm(x))
+        nvtx.range_pop()  # mlp
+        x = x + self.mlp_scale.to(dtype=x.dtype)[None, None, :] * mlp_out
         return x
 
 
@@ -1015,6 +1022,20 @@ def main() -> None:
                 f"step:{step}/{args.iterations} val_loss:{val_loss:.4f} val_bpb:{val_bpb:.4f} "
                 f"train_time:{training_time_ms:.0f}ms step_avg:{training_time_ms / max(step, 1):.2f}ms"
             )
+            # ---- quality stats (model health) ----
+            with torch.no_grad():
+                resid_parts, qgain_parts = [], []
+                for i, blk in enumerate(base_model.blocks):
+                    mix = blk.resid_mix.float()
+                    resid_parts.append(f"L{i}:[{mix[0].mean().item():.3f},{mix[1].mean().item():.3f}]")
+                    qgain_parts.append(f"L{i}:{blk.attn.q_gain.float().mean().item():.3f}")
+                log0("quality resid_mix(x,x0): " + " ".join(resid_parts))
+                log0("quality q_gain: " + " ".join(qgain_parts))
+                if base_model.skip_weights.numel() > 0:
+                    sw = base_model.skip_weights.float()
+                    log0("quality skip_weights: " + " ".join(
+                        f"S{i}:{sw[i].mean().item():.3f}" for i in range(sw.shape[0])
+                    ))
             torch.cuda.synchronize()
             t0 = time.perf_counter()
 
@@ -1033,11 +1054,17 @@ def main() -> None:
         for micro_step in range(grad_accum_steps):
             if distributed:
                 model.require_backward_grad_sync = micro_step == grad_accum_steps - 1
+            nvtx.range_push("data_load")
             x, y = train_loader.next_batch(args.train_batch_tokens, args.train_seq_len, grad_accum_steps)
+            nvtx.range_pop()  # data_load
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
+                nvtx.range_push("forward")
                 loss = model(x, y)
+                nvtx.range_pop()  # forward
             train_loss += loss.detach()
+            nvtx.range_push("backward")
             (loss * grad_scale).backward()
+            nvtx.range_pop()  # backward
         train_loss /= grad_accum_steps
 
         frac = min(step / args.muon_momentum_warmup_steps, 1.0) if args.muon_momentum_warmup_steps > 0 else 1.0
@@ -1051,8 +1078,27 @@ def main() -> None:
 
         if args.grad_clip_norm > 0:
             torch.nn.utils.clip_grad_norm_(base_model.parameters(), args.grad_clip_norm)
+        # Capture per-layer grad norms before zeroing (grads gone after zero_grad_all)
+        next_step = step + 1
+        will_log_train = args.train_log_every > 0 and (
+            next_step <= 10 or next_step % args.train_log_every == 0 or stop_after_step is not None
+        )
+        layer_grad_norms_str = ""
+        if will_log_train:
+            with torch.no_grad():
+                gnorm_parts = []
+                for i, blk in enumerate(base_model.blocks):
+                    grads = [p.grad.float().norm() for p in blk.parameters() if p.grad is not None]
+                    if grads:
+                        gnorm_parts.append(f"L{i}:{torch.stack(grads).norm().item():.4f}")
+                eg = base_model.tok_emb.weight.grad
+                if eg is not None:
+                    gnorm_parts.append(f"emb:{eg.float().norm().item():.4f}")
+                layer_grad_norms_str = " ".join(gnorm_parts)
+        nvtx.range_push("optimizer")
         for opt in optimizers:
             opt.step()
+        nvtx.range_pop()  # optimizer
         zero_grad_all()
 
         step += 1
@@ -1065,7 +1111,10 @@ def main() -> None:
             log0(
                 f"step:{step}/{args.iterations} train_loss:{train_loss.item():.4f} "
                 f"train_time:{approx_training_time_ms:.0f}ms step_avg:{approx_training_time_ms / step:.2f}ms"
+                f" lr_scale:{scale:.4f}"
             )
+            if layer_grad_norms_str:
+                log0(f"grad_norms: {layer_grad_norms_str}")
 
         # Needed to sync whether we've reached the wallclock cap.
         reached_cap = max_wallclock_ms is not None and approx_training_time_ms >= max_wallclock_ms
