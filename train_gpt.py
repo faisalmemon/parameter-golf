@@ -625,17 +625,19 @@ class CausalSelfAttention(nn.Module):
 
 
 class MLP(nn.Module):
-    # relu^2 MLP from the original modded-nanogpt setup
+    # SwiGLU MLP: iso-parameter replacement for relu^2
+    # hidden = 2/3 * mlp_mult * dim keeps total params equal to the relu^2 version
+    # (3 matrices * hidden vs 2 matrices * mlp_mult*dim)
     def __init__(self, dim: int, mlp_mult: int):
         super().__init__()
-        hidden = mlp_mult * dim
-        self.fc = CastedLinear(dim, hidden, bias=False)
+        hidden = int(mlp_mult * dim * 2 / 3)
+        self.gate_up = CastedLinear(dim, hidden * 2, bias=False)
         self.proj = CastedLinear(hidden, dim, bias=False)
         self.proj._zero_init = True
 
     def forward(self, x: Tensor) -> Tensor:
-        x = torch.relu(self.fc(x))
-        return self.proj(x.square())
+        gate, up = self.gate_up(x).chunk(2, dim=-1)
+        return self.proj(F.silu(gate) * up)
 
 
 class Block(nn.Module):
