@@ -1,3 +1,11 @@
+Excellent baseline run. 276 steps, final val_bpb: 1.6951. This is your comparison number for every future experiment.
+
+The most important finding — skip_weights collapse:
+
+Skip	Connects	Step 0	Step 276
+S0	L2→L3 (adjacent)	1.000	0.973
+S1	L1→L4 (mid-range)	1.000	0.460
+S2	L0→L5 (long-range)	1.000	0.257
 
 The network is progressively suppressing the longer-range skips. The early encoder features (L0) barely reach the final decoder layer — S2 collapsed to 1/4 of its initial value. The adjacent skip (L2→L3) is nearly unchanged. This is a clear architectural signal: the U-Net skip connections are not symmetrically useful. The benefit comes almost entirely from the adjacent encoder→decoder skip, not the long-range ones.
 
