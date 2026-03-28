@@ -27,7 +27,7 @@ export NUM_LAYERS=6
 export MODEL_DIM=256
 export NUM_HEADS=4
 export NUM_KV_HEADS=2
-export MLP_MULT=2
+export MLP_MULT=3
 export TRAIN_SEQ_LEN=512   # shorter seq also reduces attention SRAM pressure
 
 # 5. Probe compile with proxy model size
