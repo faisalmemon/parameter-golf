@@ -23,9 +23,11 @@ WARMUP_STEPS=3 \
 ITERATIONS=1 \
 VAL_LOSS_EVERY=0 \
 RUN_ID="spark_compile_probe" \
-    torchrun --standalone --nproc_per_node=1 train_gpt.py 2>&1 | tail -5
+    torchrun --standalone --nproc_per_node=1 train_gpt.py > /tmp/probe_out.txt 2>&1
+PROBE_EXIT=$?
+tail -5 /tmp/probe_out.txt
 
-if [ $? -eq 0 ]; then
+if [ $PROBE_EXIT -eq 0 ]; then
     echo "compile probe: SUCCESS — using torch.compile for competition run"
     COMPILE_MODE="reduce-overhead"
 else

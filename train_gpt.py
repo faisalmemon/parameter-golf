@@ -269,6 +269,7 @@ def eval_val(
                 y = local[1:].reshape(-1, args.train_seq_len)
                 with nvtx.range("forward"):
                     with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
+                        torch.compiler.cudagraph_mark_step_begin()
                         batch_loss = model(x, y).detach()
                 batch_token_count = float(y.numel())
                 val_loss_sum += batch_loss.to(torch.float64) * batch_token_count
@@ -978,6 +979,7 @@ def main() -> None:
                     model.require_backward_grad_sync = micro_step == grad_accum_steps - 1
                 x, y = train_loader.next_batch(args.train_batch_tokens, args.train_seq_len, grad_accum_steps)
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
+                    torch.compiler.cudagraph_mark_step_begin()
                     warmup_loss = model(x, y)
                 (warmup_loss * grad_scale).backward()
             for opt in optimizers:
@@ -1064,6 +1066,7 @@ def main() -> None:
             nvtx.range_pop()  # data_load
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
                 nvtx.range_push("forward")
+                torch.compiler.cudagraph_mark_step_begin()
                 loss = model(x, y)
                 nvtx.range_pop()  # forward
             train_loss += loss.detach()
