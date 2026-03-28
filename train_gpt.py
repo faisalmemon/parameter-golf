@@ -660,13 +660,14 @@ class Block(nn.Module):
     def forward(self, x: Tensor, x0: Tensor) -> Tensor:
         mix = self.resid_mix.to(dtype=x.dtype)
         x = mix[0][None, None, :] * x + mix[1][None, None, :] * x0
-        nvtx.range_push("attn")
+        _profiling = not torch.compiler.is_compiling()
+        if _profiling: nvtx.range_push("attn")
         attn_out = self.attn(self.attn_norm(x))
-        nvtx.range_pop()  # attn
+        if _profiling: nvtx.range_pop()  # attn
         x = x + self.attn_scale.to(dtype=x.dtype)[None, None, :] * attn_out
-        nvtx.range_push("mlp")
+        if _profiling: nvtx.range_push("mlp")
         mlp_out = self.mlp(self.mlp_norm(x))
-        nvtx.range_pop()  # mlp
+        if _profiling: nvtx.range_pop()  # mlp
         x = x + self.mlp_scale.to(dtype=x.dtype)[None, None, :] * mlp_out
         return x
 
