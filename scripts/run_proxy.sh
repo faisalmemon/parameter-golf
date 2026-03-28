@@ -28,6 +28,7 @@ export MODEL_DIM=256
 export NUM_HEADS=4
 export NUM_KV_HEADS=2
 export MLP_MULT=3
+export MAX_SKIP_WEIGHTS=2
 export TRAIN_SEQ_LEN=512   # shorter seq also reduces attention SRAM pressure
 
 # 5. Probe compile with proxy model size
@@ -44,6 +45,7 @@ MODEL_DIM=$MODEL_DIM \
 NUM_HEADS=$NUM_HEADS \
 NUM_KV_HEADS=$NUM_KV_HEADS \
 TRAIN_SEQ_LEN=$TRAIN_SEQ_LEN \
+MAX_SKIP_WEIGHTS=$MAX_SKIP_WEIGHTS \
     torchrun --standalone --nproc_per_node=1 train_gpt.py > /tmp/proxy_probe_out.txt 2>&1
 PROBE_EXIT=$?
 tail -5 /tmp/proxy_probe_out.txt
