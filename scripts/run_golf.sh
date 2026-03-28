@@ -6,7 +6,7 @@ rm -rf /tmp/torchinductor_ubuntu/*
 
 # 2. Patch the code for DGX Spark (Blackwell GB10) compatibility
 # Reference 736: Disable functional compile on the optimizer
-sed -i 's/zeropower_via_newtonschulz5 = torch.compile(zeropower_via_newtonschulz5)/# zeropower_via_newtonschulz5 = torch.compile(zeropower_via_newtonschulz5)/g' train_gpt.py
+sed -i 's/zeropower_via_newtonschulz5 = torch.compile(zeropower_via_newtonschulz5, mode="reduce-overhead")/# zeropower_via_newtonschulz5 = torch.compile(zeropower_via_newtonschulz5, mode="reduce-overhead")/g' train_gpt.py
 
 # Reference 843: Disable structural model compile to stay under 101KB SRAM
 sed -i 's/compiled_model = torch.compile(base_model, dynamic=False, fullgraph=True)/compiled_model = base_model/g' train_gpt.py
