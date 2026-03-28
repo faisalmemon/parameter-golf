@@ -735,9 +735,12 @@ class GPT(nn.Module):
         skips: list[Tensor] = []
 
         # First half stores skips; second half reuses them in reverse order.
+        # Only the last num_skip_weights encoder outputs are pushed, so the
+        # outermost encoder/decoder pairs are ablated when num_skip_weights is capped.
         for i in range(self.num_encoder_layers):
             x = self.blocks[i](x, x0)
-            skips.append(x)
+            if i >= self.num_encoder_layers - self.num_skip_weights:
+                skips.append(x)
         for i in range(self.num_decoder_layers):
             if skips:
                 x = x + self.skip_weights[i].to(dtype=x.dtype)[None, None, :] * skips.pop()
